@@ -20,7 +20,7 @@ const {
   McpError,
 } = require('@modelcontextprotocol/sdk/types.js');
 const axios = require('axios');
-const Database = require('better-sqlite3');
+// Removed database dependency for better npx compatibility
 const { parseString } = require('xml2js');
 const path = require('path');
 const fs = require('fs');
@@ -41,52 +41,11 @@ class PubMedError extends Error {
   }
 }
 
-// Initialize SQLite database
+// Initialize database (disabled for npx compatibility)
 function initDatabase() {
-  try {
-    const db = new Database(DB_PATH);
-    
-    // Create tables
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS searches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        query TEXT NOT NULL,
-        search_type TEXT NOT NULL DEFAULT 'pubmed',
-        timestamp TEXT NOT NULL,
-        result_count INTEGER NOT NULL,
-        total_found INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS articles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        search_id INTEGER NOT NULL,
-        pmid TEXT NOT NULL,
-        pmcid TEXT,
-        title TEXT NOT NULL,
-        authors TEXT NOT NULL,
-        journal TEXT NOT NULL,
-        pub_date TEXT NOT NULL,
-        doi TEXT,
-        abstract TEXT,
-        keywords TEXT,
-        mesh_terms TEXT,
-        is_open_access BOOLEAN DEFAULT 0,
-        pmc_available BOOLEAN DEFAULT 0,
-        FOREIGN KEY (search_id) REFERENCES searches (id),
-        UNIQUE (search_id, pmid)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_articles_search_id ON articles(search_id);
-      CREATE INDEX IF NOT EXISTS idx_articles_pmid ON articles(pmid);
-      CREATE INDEX IF NOT EXISTS idx_articles_pmcid ON articles(pmcid);
-    `);
-    
-    db.close();
-    // Database initialized successfully
-    return Promise.resolve();
-  } catch (error) {
-    return Promise.reject(new PubMedError(`Failed to initialize database: ${error.message}`));
-  }
+  // Database functionality temporarily disabled for better npx compatibility
+  // All search operations work without persistent storage
+  return Promise.resolve();
 }
 
 // Rate limiting utility
@@ -854,6 +813,7 @@ async function main() {
     // Enhanced PubMed MCP Server (Node.js) started successfully
   } catch (error) {
     console.error('Failed to start server:', error.message);
+    console.error('Stack trace:', error.stack);
     process.exit(1);
   }
 }
@@ -870,7 +830,8 @@ process.on('SIGTERM', () => {
 // Start the server
 if (require.main === module) {
   main().catch(error => {
-    console.error('Fatal error:', error);
+    console.error('Fatal error:', error.message);
+    console.error('Stack trace:', error.stack);
     process.exit(1);
   });
 }

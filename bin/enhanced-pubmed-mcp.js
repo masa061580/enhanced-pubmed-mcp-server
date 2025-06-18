@@ -62,7 +62,7 @@ if (args.includes('--version') || args.includes('-v')) {
 
 // Spawn the main server process
 const serverProcess = spawn('node', [serverPath, ...args], {
-  stdio: 'inherit',
+  stdio: ['inherit', 'inherit', 'inherit'],
   shell: false
 });
 
