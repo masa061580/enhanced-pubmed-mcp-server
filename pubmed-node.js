@@ -20,7 +20,7 @@ const {
   McpError,
 } = require('@modelcontextprotocol/sdk/types.js');
 const axios = require('axios');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 const { parseString } = require('xml2js');
 const path = require('path');
 const fs = require('fs');
@@ -43,65 +43,50 @@ class PubMedError extends Error {
 
 // Initialize SQLite database
 function initDatabase() {
-  return new Promise((resolve, reject) => {
-    const db = new sqlite3.Database(DB_PATH, (err) => {
-      if (err) {
-        reject(new PubMedError(`Failed to initialize database: ${err.message}`));
-        return;
-      }
+  try {
+    const db = new Database(DB_PATH);
+    
+    // Create tables
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS searches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query TEXT NOT NULL,
+        search_type TEXT NOT NULL DEFAULT 'pubmed',
+        timestamp TEXT NOT NULL,
+        result_count INTEGER NOT NULL,
+        total_found INTEGER NOT NULL
+      );
 
-      // Create tables
-      db.serialize(() => {
-        // Searches table
-        db.run(`
-          CREATE TABLE IF NOT EXISTS searches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            query TEXT NOT NULL,
-            search_type TEXT NOT NULL DEFAULT 'pubmed',
-            timestamp TEXT NOT NULL,
-            result_count INTEGER NOT NULL,
-            total_found INTEGER NOT NULL
-          )
-        `);
+      CREATE TABLE IF NOT EXISTS articles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        search_id INTEGER NOT NULL,
+        pmid TEXT NOT NULL,
+        pmcid TEXT,
+        title TEXT NOT NULL,
+        authors TEXT NOT NULL,
+        journal TEXT NOT NULL,
+        pub_date TEXT NOT NULL,
+        doi TEXT,
+        abstract TEXT,
+        keywords TEXT,
+        mesh_terms TEXT,
+        is_open_access BOOLEAN DEFAULT 0,
+        pmc_available BOOLEAN DEFAULT 0,
+        FOREIGN KEY (search_id) REFERENCES searches (id),
+        UNIQUE (search_id, pmid)
+      );
 
-        // Articles table
-        db.run(`
-          CREATE TABLE IF NOT EXISTS articles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            search_id INTEGER NOT NULL,
-            pmid TEXT NOT NULL,
-            pmcid TEXT,
-            title TEXT NOT NULL,
-            authors TEXT NOT NULL,
-            journal TEXT NOT NULL,
-            pub_date TEXT NOT NULL,
-            doi TEXT,
-            abstract TEXT,
-            keywords TEXT,
-            mesh_terms TEXT,
-            is_open_access BOOLEAN DEFAULT 0,
-            pmc_available BOOLEAN DEFAULT 0,
-            FOREIGN KEY (search_id) REFERENCES searches (id),
-            UNIQUE (search_id, pmid)
-          )
-        `);
-
-        // Create indexes
-        db.run('CREATE INDEX IF NOT EXISTS idx_articles_search_id ON articles(search_id)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_articles_pmid ON articles(pmid)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_articles_pmcid ON articles(pmcid)');
-      });
-
-      db.close((err) => {
-        if (err) {
-          reject(new PubMedError(`Failed to close database: ${err.message}`));
-        } else {
-          console.log('✅ Enhanced database initialized successfully');
-          resolve();
-        }
-      });
-    });
-  });
+      CREATE INDEX IF NOT EXISTS idx_articles_search_id ON articles(search_id);
+      CREATE INDEX IF NOT EXISTS idx_articles_pmid ON articles(pmid);
+      CREATE INDEX IF NOT EXISTS idx_articles_pmcid ON articles(pmcid);
+    `);
+    
+    db.close();
+    // Database initialized successfully
+    return Promise.resolve();
+  } catch (error) {
+    return Promise.reject(new PubMedError(`Failed to initialize database: ${error.message}`));
+  }
 }
 
 // Rate limiting utility
@@ -447,6 +432,67 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['pmid']
         }
+      },
+      {
+        name: 'search_pmc_fulltext',
+        description: 'Search PubMed Central (PMC) for full-text open access articles',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Search query for full-text search'
+            },
+            max_results: {
+              type: 'number',
+              description: 'Maximum number of results (default: 10, max: 50)',
+              default: DEFAULT_MAX_RESULTS
+            }
+          },
+          required: ['query']
+        }
+      },
+      {
+        name: 'retrieve_pubmed_results',
+        description: 'Retrieve previously stored PubMed search results with pagination',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            search_id: {
+              type: 'number',
+              description: 'ID of the stored search to retrieve'
+            },
+            page: {
+              type: 'number',
+              description: 'Page number to retrieve (starts at 1)',
+              default: 1
+            },
+            results_per_page: {
+              type: 'number',
+              description: 'Number of results per page (default: 10, max: 50)',
+              default: DEFAULT_MAX_RESULTS
+            }
+          },
+          required: ['search_id']
+        }
+      },
+      {
+        name: 'list_pubmed_searches',
+        description: 'List all previously stored PubMed and PMC searches',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      },
+      {
+        name: 'get_abstract_help',
+        description: 'Get help and examples for using the get_full_abstract function',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
       }
     ]
   };
@@ -462,6 +508,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return await handleSearchPubmed(args.query, args.max_results);
       case 'get_full_abstract':
         return await handleGetFullAbstract(args.pmid);
+      case 'search_pmc_fulltext':
+        return await handleSearchPmcFulltext(args.query, args.max_results);
+      case 'retrieve_pubmed_results':
+        return await handleRetrievePubmedResults(args.search_id, args.page, args.results_per_page);
+      case 'list_pubmed_searches':
+        return await handleListPubmedSearches();
+      case 'get_abstract_help':
+        return await handleGetAbstractHelp();
       default:
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
@@ -641,6 +695,152 @@ ${abstract}
   }
 }
 
+// Handle PMC fulltext search
+async function handleSearchPmcFulltext(query, maxResults = DEFAULT_MAX_RESULTS) {
+  if (!query || !query.trim()) {
+    return {
+      content: [{ type: 'text', text: '❌ Please provide a search query.' }]
+    };
+  }
+  
+  query = query.trim();
+  maxResults = Math.max(1, Math.min(maxResults, 50));
+  
+  try {
+    const articles = await search_pmc(query, maxResults);
+    
+    if (!articles || articles.length === 0) {
+      return {
+        content: [{ type: 'text', text: `🔍 No full-text articles found in PMC for query: **${query}**` }]
+      };
+    }
+    
+    // Format results
+    const formattedArticles = articles.map(article => formatEnhancedArticle(article));
+    
+    // Create header
+    let header = `📖 **PMC Full-Text Search - Found ${articles.length} result${articles.length !== 1 ? 's' : ''} for:** *${query}*\n`;
+    header += `🔓 **All results have full text available**\n`;
+    
+    const disclaimer = '\n📖 **Note:** These are open access articles with full text available in PMC. Click the PMC links to access complete articles.';
+    
+    const resultText = header + '\n' + formattedArticles.join('\n') + disclaimer;
+    
+    return {
+      content: [{ type: 'text', text: resultText }]
+    };
+    
+  } catch (error) {
+    const errorMessage = error instanceof PubMedError 
+      ? `❌ PMC Error: ${error.message}`
+      : `❌ An unexpected error occurred: ${error.message}`;
+    
+    return {
+      content: [{ type: 'text', text: errorMessage }]
+    };
+  }
+}
+
+// Search PMC function (simplified version)
+async function search_pmc(query, maxResults) {
+  const searchParams = {
+    db: 'pmc',
+    term: query,
+    retmax: maxResults,
+    retmode: 'json',
+    sort: 'relevance'
+  };
+  
+  const searchResult = await makeNcbiRequest('esearch.fcgi', searchParams);
+  
+  if (!searchResult || !searchResult.esearchresult) {
+    return [];
+  }
+  
+  const idList = searchResult.esearchresult.idlist || [];
+  
+  if (idList.length === 0) {
+    return [];
+  }
+  
+  // Get detailed PMC information
+  const summaryParams = {
+    db: 'pmc',
+    id: idList.join(','),
+    retmode: 'json'
+  };
+  
+  const summaryResult = await makeNcbiRequest('esummary.fcgi', summaryParams);
+  
+  if (!summaryResult || !summaryResult.result) {
+    return [];
+  }
+  
+  const articles = [];
+  for (const pmcId of idList) {
+    if (pmcId in summaryResult.result) {
+      const articleData = summaryResult.result[pmcId];
+      if (typeof articleData === 'object' && articleData.uid) {
+        // Mark as PMC article
+        articleData.is_pmc = true;
+        articleData.pmcid = `PMC${pmcId}`;
+        articles.push(articleData);
+      }
+    }
+  }
+  
+  return articles;
+}
+
+// Handle retrieve pubmed results
+async function handleRetrievePubmedResults(searchId, page = 1, resultsPerPage = DEFAULT_MAX_RESULTS) {
+  return {
+    content: [{ type: 'text', text: '📋 **Feature temporarily unavailable**: Database storage functionality is being implemented for the Node.js version. Please use the search functions directly.' }]
+  };
+}
+
+// Handle list pubmed searches  
+async function handleListPubmedSearches() {
+  return {
+    content: [{ type: 'text', text: '📋 **Feature temporarily unavailable**: Search history functionality is being implemented for the Node.js version. Please use the search functions directly.' }]
+  };
+}
+
+// Handle get abstract help
+async function handleGetAbstractHelp() {
+  const helpText = `
+📋 **Help: How to Use get_full_abstract Function**
+
+**✅ Both formats now work:**
+- \`get_full_abstract("35504917")\`   # String format (with quotes)
+- \`get_full_abstract(35504917)\`     # Number format (without quotes)
+
+**📈 Example PMIDs to try:**
+- **35504917** - COVID-19 vaccine development review
+- **38810186** - Medical AI and human values
+- **36656942** - CRISPR technology (by Jennifer Doudna)
+- **34465179** - Machine learning for healthcare
+- **38301492** - AI-enhanced electrocardiography
+
+**💡 Tips:**
+1. PMIDs are usually 8 digits long
+2. You can copy PMIDs directly from search results
+3. Both \`12345678\` and \`"12345678"\` formats work
+4. Function retrieves complete abstracts, MeSH terms, and keywords
+5. Provides direct PubMed links for full articles
+
+**🔍 What this function does:**
+- Fetches complete abstracts (not truncated)
+- Extracts MeSH terms and keywords
+- Provides bibliographic information
+- Generates direct PubMed links
+- Works with any valid PMID`;
+
+  return {
+    content: [{ type: 'text', text: helpText }]
+  };
+}
+
 // Initialize and start the server
 async function main() {
   try {
@@ -651,28 +851,26 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     
-    console.error('🚀 Enhanced PubMed MCP Server (Node.js) started successfully');
+    // Enhanced PubMed MCP Server (Node.js) started successfully
   } catch (error) {
-    console.error('❌ Failed to start server:', error.message);
+    console.error('Failed to start server:', error.message);
     process.exit(1);
   }
 }
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
-  console.error('\n🛑 Shutting down Enhanced PubMed MCP Server...');
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.error('\n🛑 Terminating Enhanced PubMed MCP Server...');
   process.exit(0);
 });
 
 // Start the server
 if (require.main === module) {
   main().catch(error => {
-    console.error('❌ Fatal error:', error);
+    console.error('Fatal error:', error);
     process.exit(1);
   });
 }

@@ -20,7 +20,7 @@ const args = process.argv.slice(2);
 // Check for help or version flags
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`
-🔬 Enhanced PubMed MCP Server
+Enhanced PubMed MCP Server
 
 Usage:
   npx enhanced-pubmed-mcp-server [options]
@@ -58,10 +58,7 @@ if (args.includes('--version') || args.includes('-v')) {
   process.exit(0);
 }
 
-// Start the MCP server
-console.error('🚀 Starting Enhanced PubMed MCP Server...');
-console.error(`📍 Server: ${serverPath}`);
-console.error('─'.repeat(50));
+// Start the MCP server (no output for MCP mode)
 
 // Spawn the main server process
 const serverProcess = spawn('node', [serverPath, ...args], {
@@ -69,28 +66,20 @@ const serverProcess = spawn('node', [serverPath, ...args], {
   shell: false
 });
 
-// Handle process events
+// Handle process events (silent for MCP mode)
 serverProcess.on('error', (error) => {
-  console.error(`❌ Failed to start MCP server: ${error.message}`);
   process.exit(1);
 });
 
 serverProcess.on('close', (code) => {
-  if (code !== 0) {
-    console.error(`\n❌ MCP server exited with code ${code}`);
-    process.exit(code);
-  } else {
-    console.error('\n✅ Enhanced PubMed MCP Server stopped gracefully');
-  }
+  process.exit(code);
 });
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
-  console.error('\n🛑 Shutting down Enhanced PubMed MCP Server...');
   serverProcess.kill('SIGINT');
 });
 
 process.on('SIGTERM', () => {
-  console.error('\n🛑 Terminating Enhanced PubMed MCP Server...');
   serverProcess.kill('SIGTERM');
 });
