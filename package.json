@@ -1,0 +1,62 @@
+{
+  "name": "enhanced-pubmed-mcp-server",
+  "version": "1.0.0",
+  "description": "Enhanced PubMed Search MCP Server - Pure Node.js implementation with no Python dependencies",
+  "main": "pubmed-node.js",
+  "bin": {
+    "enhanced-pubmed-mcp": "./bin/enhanced-pubmed-mcp.js",
+    "pubmed-mcp": "./bin/enhanced-pubmed-mcp.js"
+  },
+  "scripts": {
+    "start": "node pubmed-node.js",
+    "dev": "node pubmed-node.js",
+    "server": "node pubmed-node.js",
+    "test": "node -e \"console.log('Node.js dependencies OK')\"",
+    "test-npx": "node bin/enhanced-pubmed-mcp.js --version",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "pubmed",
+    "mcp",
+    "medical-literature",
+    "research",
+    "api",
+    "nodejs",
+    "claude",
+    "model-context-protocol",
+    "ncbi",
+    "biomedical"
+  ],
+  "author": {
+    "name": "Your Name",
+    "email": "your.email@example.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/enhanced-pubmed-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/enhanced-pubmed-mcp-server/issues"
+  },
+  "homepage": "https://github.com/yourusername/enhanced-pubmed-mcp-server#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.4.0",
+    "axios": "^1.6.0",
+    "sqlite3": "^5.1.6",
+    "xml2js": "^0.6.2"
+  },
+  "files": [
+    "pubmed-node.js",
+    "bin/",
+    "README.md"
+  ]
+}
