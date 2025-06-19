@@ -128,9 +128,14 @@ function parsePubMedXml(xmlContent) {
             for (const abstractText of abstractElem.AbstractText) {
               if (typeof abstractText === 'string') {
                 abstractParts.push(abstractText);
-              } else if (abstractText._) {
-                const label = abstractText.$.Label || '';
-                abstractParts.push(label ? `${label}: ${abstractText._}` : abstractText._);
+              } else if (abstractText && typeof abstractText === 'object') {
+                // 安全にLabelプロパティにアクセス
+                const label = (abstractText.$ && abstractText.$.Label) ? abstractText.$.Label : '';
+                const text = abstractText._ || '';
+                
+                if (text) {
+                  abstractParts.push(label ? `${label}: ${text}` : text);
+                }
               }
             }
             articleData.abstract = abstractParts.join(' ') || 'No abstract available';
