@@ -1,6 +1,6 @@
 {
   "name": "enhanced-pubmed-mcp-server",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Enhanced PubMed Search MCP Server - Pure Node.js implementation with no Python dependencies",
   "main": "pubmed-node.js",
   "bin": {
