@@ -48,17 +48,22 @@ function initDatabase() {
   return Promise.resolve();
 }
 
-// Rate limiting utility
+// Rate limiting utility - Thread-safe implementation
 let lastRequestTime = 0;
+let requestQueue = Promise.resolve();
+
 async function rateLimitedRequest() {
-  const now = Date.now();
-  const timeSinceLastRequest = now - lastRequestTime;
-  
-  if (timeSinceLastRequest < RATE_LIMIT_DELAY) {
-    await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY - timeSinceLastRequest));
-  }
-  
-  lastRequestTime = Date.now();
+  // Use a queue to ensure thread-safe rate limiting
+  return requestQueue = requestQueue.then(async () => {
+    const now = Date.now();
+    const timeSinceLastRequest = now - lastRequestTime;
+    
+    if (timeSinceLastRequest < RATE_LIMIT_DELAY) {
+      await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY - timeSinceLastRequest));
+    }
+    
+    lastRequestTime = Date.now();
+  });
 }
 
 // Make NCBI API request
@@ -90,7 +95,21 @@ async function makeNcbiRequest(endpoint, params) {
 // Parse PubMed XML to extract article information
 function parsePubMedXml(xmlContent) {
   return new Promise((resolve, reject) => {
-    parseString(xmlContent, (err, result) => {
+    // Add XML parsing options for security
+    const parserOptions = {
+      explicitArray: true,
+      trim: true,
+      normalize: true,
+      normalizeTags: false,
+      attrkey: '$',
+      charkey: '_',
+      // Security limits
+      maxCharsInDocument: 50 * 1024 * 1024, // 50MB limit
+      maxChildrenInDocument: 100000, // Max number of child elements
+      maxDepth: 100 // Max nesting depth
+    };
+    
+    parseString(xmlContent, parserOptions, (err, result) => {
       if (err) {
         reject(new PubMedError(`Failed to parse XML: ${err.message}`));
         return;
@@ -174,12 +193,16 @@ function parsePubMedXml(xmlContent) {
           }
           
           // Extract DOI and other IDs
-          for (const id of article) {
-            if (id.$.IdType === 'doi') {
-              articleData.elocationid = `doi:${id._}`;
-            } else if (id.$.IdType === 'pmc') {
-              articleData.pmcid = id._;
-              articleData.pmc_available = true;
+          if (Array.isArray(article)) {
+            for (const id of article) {
+              if (id && id.$ && id.$.IdType && id._) {
+                if (id.$.IdType === 'doi') {
+                  articleData.elocationid = `doi:${id._}`;
+                } else if (id.$.IdType === 'pmc') {
+                  articleData.pmcid = id._;
+                  articleData.pmc_available = true;
+                }
+              }
             }
           }
           
@@ -224,6 +247,7 @@ async function fetchDetailedArticles(pmidList) {
   
   const chunkSize = 200;
   const allArticles = [];
+  const failedChunks = [];
   
   for (let i = 0; i < pmidList.length; i += chunkSize) {
     const chunk = pmidList.slice(i, i + chunkSize);
@@ -240,9 +264,26 @@ async function fetchDetailedArticles(pmidList) {
       const articles = await parsePubMedXml(xmlContent);
       allArticles.push(...articles);
     } catch (error) {
-      console.error(`Error fetching chunk ${i}-${i + chunk.length}: ${error.message}`);
-      // Continue with next chunk instead of failing completely
+      const chunkInfo = {
+        startIndex: i,
+        endIndex: i + chunk.length - 1,
+        pmids: chunk,
+        error: error.message,
+        errorType: error.constructor.name
+      };
+      failedChunks.push(chunkInfo);
+      
+      console.error(`Error fetching chunk ${i}-${i + chunk.length}: ${error.message}`, {
+        pmids: chunk.slice(0, 5), // Log first 5 PMIDs for debugging
+        totalInChunk: chunk.length,
+        errorType: error.constructor.name
+      });
     }
+  }
+  
+  // Log summary of failed chunks if any
+  if (failedChunks.length > 0) {
+    console.warn(`Failed to fetch ${failedChunks.length} chunk(s) out of ${Math.ceil(pmidList.length / chunkSize)} total chunks. ${allArticles.length} articles successfully retrieved.`);
   }
   
   return allArticles;
@@ -500,7 +541,12 @@ async function handleSearchPubmed(query, maxResults = DEFAULT_MAX_RESULTS) {
   }
   
   query = query.trim();
-  maxResults = Math.max(1, Math.min(maxResults, MAX_SEARCH_RESULTS));
+  
+  // Enhanced maxResults validation
+  if (typeof maxResults !== 'number' || isNaN(maxResults) || maxResults === null || maxResults === undefined) {
+    maxResults = DEFAULT_MAX_RESULTS;
+  }
+  maxResults = Math.max(1, Math.min(Math.floor(Math.abs(maxResults)), MAX_SEARCH_RESULTS));
   
   try {
     // Search PubMed
@@ -668,7 +714,12 @@ async function handleSearchPmcFulltext(query, maxResults = DEFAULT_MAX_RESULTS) 
   }
   
   query = query.trim();
-  maxResults = Math.max(1, Math.min(maxResults, 50));
+  
+  // Enhanced maxResults validation for PMC
+  if (typeof maxResults !== 'number' || isNaN(maxResults) || maxResults === null || maxResults === undefined) {
+    maxResults = DEFAULT_MAX_RESULTS;
+  }
+  maxResults = Math.max(1, Math.min(Math.floor(Math.abs(maxResults)), 50));
   
   try {
     const articles = await search_pmc(query, maxResults);
